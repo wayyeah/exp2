@@ -170,8 +170,6 @@ class AnchorHeadRDIoU_3CAT(AnchorHeadTemplate):
                                    box_preds.shape[-1])
 
         _, rdiou = self.get_rdiou(box_preds, box_reg_targets)
-
-
         with torch.no_grad():
             rdiou_guided_cls_labels = re_box_cls_labels.float()
             rdiou_guided_cls_labels[rdiou_guided_cls_labels>0] = rdiou[rdiou_guided_cls_labels>0]
@@ -216,6 +214,9 @@ class AnchorHeadRDIoU_3CAT(AnchorHeadTemplate):
                                    box_preds.shape[-1])
 
         u, rdiou = self.get_rdiou(box_preds, box_reg_targets)
+        
+        
+        
         rdiou_loss_n = rdiou
         rdiou_loss_n = torch.clamp(rdiou_loss_n,min=-1.0,max = 1.0)
         #print((u* reg_weights).sum()/ batch_size* self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['loc_weight'])
@@ -370,9 +371,13 @@ class AnchorHeadRDIoU_3CAT(AnchorHeadTemplate):
                 weight_factor[rdiou < iou_threshold_low] *= 2.75 # 例如，可以增加 100% 的权重
                 rdiou_loss_src = rdiou_loss_src * weight_factor    
         rdiou_loss = rdiou_loss_src.sum() / batch_size
-        rdiou_loss = rdiou_loss * self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['loc_weight']
-        #print("after", rdiou_loss)
+        loc_loss_func=loss_utils.WeightedL1Loss(code_weights=[0.5, 0.5, 0, 0, 0, 0, 0])
+        loc_loss=loc_loss_func(box_preds, box_reg_targets, weights=reg_weights)
+        loc_loss = loc_loss.sum() / batch_size
+        print("loc_loss{},rdiou_loss{}".format(loc_loss,rdiou_loss))
         
+        rdiou_loss = (loc_loss+rdiou_loss) * self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['loc_weight']
+        #print("after", rdiou_loss)
         
         
         
