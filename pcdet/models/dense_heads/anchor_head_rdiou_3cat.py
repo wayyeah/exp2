@@ -371,7 +371,7 @@ class AnchorHeadRDIoU_3CAT(AnchorHeadTemplate):
                 weight_factor[rdiou < iou_threshold_low] *= 2.75 # 例如，可以增加 100% 的权重
                 rdiou_loss_src = rdiou_loss_src * weight_factor    
         rdiou_loss = rdiou_loss_src.sum() / batch_size
-        loc_loss_func=loss_utils.WeightedL1Loss(code_weights=[0.5, 0.5, 0, 0, 0, 0, 0])
+        loc_loss_func=loss_utils.WeightedL1Loss(code_weights=[1.0, 1.0, 0, 0, 0, 0, 0])
         loc_loss=loc_loss_func(box_preds, box_reg_targets, weights=reg_weights)
         loc_loss = loc_loss.sum() / batch_size
         print("loc_loss{},rdiou_loss{}".format(loc_loss,rdiou_loss))
