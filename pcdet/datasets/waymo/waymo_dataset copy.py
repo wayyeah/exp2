@@ -49,49 +49,29 @@ def box_cut(box, cloud_in, scale=1.0):
         pts_out: array, points outside box
     """
 
-        # 确保数据在 GPU 上，如果有可用 GPU
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    cloud=np.zeros(shape=(cloud_in.shape[0],4))
+    cloud[:,0:3]=cloud_in[:,0:3]
+    cloud[:,3]=1
 
-    # 假设 cloud_in 是一个 NumPy 数组，首先将其转换为 PyTorch 张量
-    cloud_in = torch.tensor(cloud_in, dtype=torch.float32, device=device)
-    box=torch.tensor(box,dtype=torch.float32,device=device)
-    # 创建一个形状为 (N, 4) 的全零张量
-    cloud = torch.zeros((cloud_in.shape[0], 4), dtype=torch.float32, device=device)
+    x, y, z, l, w, h, yaw = box[0],box[1],box[2],box[3],box[4],box[5],box[6]
 
-    # 将 cloud_in 的前三列复制到 cloud 的前三列
-    cloud[:, 0:3] = cloud_in[:, 0:3]
-    cloud[:, 3] = 1  # 设置 cloud 的第四列为 1
-
-    # 获取 box 参数
-    x, y, z, l, w, h, yaw = box[0], box[1], box[2], box[3], box[4], box[5], box[6]
-
-    # 创建变换矩阵
-    trans_mat = torch.eye(4, dtype=torch.float32, device=device)
-    trans_mat[0, 0] = torch.cos(yaw)
-    trans_mat[0, 1] = -torch.sin(yaw)
+    trans_mat=np.eye(4,dtype=np.float32)
+    trans_mat[0, 0] = np.cos(yaw)
+    trans_mat[0, 1] = -np.sin(yaw)
     trans_mat[0, 3] = x
-    trans_mat[1, 0] = torch.sin(yaw)
-    trans_mat[1, 1] = torch.cos(yaw)
+    trans_mat[1, 0] = np.sin(yaw)
+    trans_mat[1, 1] = np.cos(yaw)
     trans_mat[1, 3] = y
     trans_mat[2, 3] = z
 
-    # 计算变换矩阵的逆
-    trans_mat_i = torch.inverse(trans_mat)
+    trans_mat_i=np.linalg.inv(trans_mat)
+    cloud=np.matmul(cloud,trans_mat_i.T)
 
-    # 进行变换操作
-    cloud = torch.matmul(cloud, trans_mat_i.T)
-
-    # 使用 PyTorch 操作进行掩码操作
-    mask_l = (cloud[:, 0] < l * scale / 2) & (cloud[:, 0] > -l * scale / 2)
-    mask_w = (cloud[:, 1] < w * scale / 2) & (cloud[:, 1] > -w * scale / 2)
-    mask_h = (cloud[:, 2] < h * scale / 2) & (cloud[:, 2] > -h * scale / 2)
-
-    # 合并掩码
-    mask = mask_l & mask_w & mask_h
-    mask_not = ~mask
-
-    
-
+    mask_l = np.logical_and(cloud[:, 0] < l * scale / 2, cloud[:, 0] > -l * scale / 2)
+    mask_w=np.logical_and(cloud[:,1]< w*scale/2,cloud[:,1]>-w*scale/2)
+    mask_h = np.logical_and(cloud[:, 2] < h*scale/2, cloud[:, 2] > -h*scale/2)
+    mask=np.logical_and(np.logical_and(mask_w,mask_l),mask_h)
+    mask_not = np.logical_not(mask)
     return mask
 
 
@@ -120,15 +100,15 @@ class WaymoDataset(DatasetTemplate):
         else:
             self.pred_boxes_dict = {}
             
-        # logger = common_utils.create_logger("output.log", rank=0)
-        # cfg_t=EasyDict()
-        # cfg_from_yaml_file("/mnt/32THHD/yw/exp2/tools/cfgs/waymo_models/fade.yaml", cfg_t)
-        # self.model_copy=Fast(model_cfg=cfg_t.MODEL, num_class=3, dataset=self)
+        logger = common_utils.create_logger("output.log", rank=0)
+        cfg_t=EasyDict()
+        cfg_from_yaml_file("/mnt/32THHD/yw/exp2/tools/cfgs/waymo_models/fade.yaml", cfg_t)
+        self.model_copy=Fast(model_cfg=cfg_t.MODEL, num_class=3, dataset=self)
         
-        # self.model_copy.load_params_from_file(filename="/mnt/32THHD/yw/exp2/output/waymo_models/fade/480/ckpt/checkpoint_epoch_461.pth", logger=logger )
-        # #print(self.model_copy)
-        # self.model_copy.cuda()
-        # self.model_copy.eval()
+        self.model_copy.load_params_from_file(filename="/mnt/32THHD/yw/exp2/output/waymo_models/fade/480/ckpt/checkpoint_epoch_461.pth", logger=logger )
+        #print(self.model_copy)
+        self.model_copy.cuda()
+        self.model_copy.eval()
         
       
     def set_split(self, split):
@@ -291,8 +271,24 @@ class WaymoDataset(DatasetTemplate):
         else:
             for dim_idx in self.dataset_cfg.POINTS_TANH_DIM:
                 points_all[:, dim_idx] = np.tanh(points_all[:, dim_idx])
-        
-        return points_all
+        batch_dict={}
+        batch_dict['points'] = np.hstack(( np.zeros((len(points_all), 1)), points_all))[:,:5]  
+        batch_dict['batch_size'] = 1
+        load_data_to_gpu(batch_dict)
+        pred,recall,time_=self.model_copy(batch_dict)
+        pred_boxes=pred[0]['pred_boxes']
+        #print(pred[0].keys())
+        all_mask=np.zeros(len(points_all))
+        st=time.time()
+        for i in range(len(pred_boxes)):
+            box=pred_boxes[i]
+            mask= box_cut(box.cpu().numpy(), points_all)
+            all_mask=all_mask+mask
+        #print("cut time:",time.time()-st)
+        # np.save("/mnt/32THHD/yw/exp2/points.npy",points_all[all_mask>0])
+        # np.save("/mnt/32THHD/yw/exp2/pred_boxes.npy",pred_boxes.cpu().numpy())
+        # exit()
+        return points_all[all_mask>0]
 
     @staticmethod
     def transform_prebox_to_current(pred_boxes3d, pose_pre, pose_cur):
@@ -488,48 +484,16 @@ class WaymoDataset(DatasetTemplate):
                 'gt_boxes': gt_boxes_lidar,
                 'num_points_in_gt': annos.get('num_points_in_gt', None)
             })
-           
+            # st=time.time()
+            # box_idxs_of_pts = roiaware_pool3d_utils.points_in_boxes_gpu(
+            #     torch.from_numpy(input_dict['points'][:,:3]).unsqueeze(dim=0).float().cuda(),
+            #     torch.from_numpy(input_dict['gt_boxes'][:, 0:7]).unsqueeze(dim=0).float().cuda()
+            # ).long().squeeze(dim=0)
             
-            # boxes=input_dict['gt_boxes']
-            # mask_all=torch.zeros(len(input_dict['points'])).cuda()
-            # batch_dict={}
-            # batch_dict['points'] = np.hstack(( np.zeros((len(input_dict['points']), 1)), input_dict['points']))[:,:5]  
-            # batch_dict['batch_size'] = 1
-            # load_data_to_gpu(batch_dict)
-            # pred,recall,time=self.model_copy(batch_dict)
-            # pred_boxes=pred[0]['pred_boxes']
-            # pred_boxes[:,3]=6
-            # pred_boxes[:,4]=6
-            # pred_boxes[:,5]=6
-            # for i in range(pred_boxes.shape[0]):
-            #     mask=box_cut(pred_boxes[i],input_dict['points'])
-            #     mask_all=mask_all+mask
-                
-            # input_dict['points'] = input_dict['points'][mask_all.cpu().numpy()>0]
-            # np.save("/mnt/32THHD/yw/exp2/points.npy",input_dict['points'])
-            # np.save("/mnt/32THHD/yw/exp2/gt_boxes.npy",input_dict['gt_boxes'])
             
-            #print("cut time:",time.time()-st)
-            # batch_dict={}
-            # batch_dict['points'] = np.hstack(( np.zeros((len(input_dict['points']), 1)), input_dict['points']))[:,:5]  
-            # batch_dict['batch_size'] = 1
-            # load_data_to_gpu(batch_dict)
-            # pred,recall,time=self.model_copy(batch_dict)
-            # pred_boxes=pred[0]['pred_boxes']
-            # print(pred[0].keys())
-            # boxes3d, is_numpy = common_utils.check_numpy_to_torch(pred_boxes)
-            # points, is_numpy = common_utils.check_numpy_to_torch(input_dict['points'])
-            # boxes3d=boxes3d[pred[0]['pred_scores']>0.5]
+            # #input_dict['points'] = input_dict['points'][point_masks.sum(dim=0) == 1]
+            # print("cut time:",time.time()-st)
             
-            # np.save("/mnt/32THHD/yw/exp2/points.npy",points.cpu().numpy())
-            # np.save("/mnt/32THHD/yw/exp2/pred_boxes.npy",boxes3d.cpu().numpy())
-            
-            # boxes3d, is_numpy = common_utils.check_numpy_to_torch(input_dict['gt_boxes'])
-            
-            # points, is_numpy = common_utils.check_numpy_to_torch(input_dict['points'])
-            # point_masks = roiaware_pool3d_utils.points_in_boxes_cpu(points[:, 0:3], boxes3d)
-            # input_dict['points'] = input_dict['points'][point_masks.sum(dim=0) == 1]
-           
         data_dict = self.prepare_data(data_dict=input_dict)
         data_dict['metadata'] = info.get('metadata', info['frame_id'])
         data_dict.pop('num_points_in_gt', None)

@@ -37,8 +37,8 @@ gt_pkl=read_pkl(gt_path)
 det_pkl=read_pkl(result_path)
 eval_det_annos = copy.deepcopy(det_pkl)
 eval_gt_annos = [copy.deepcopy(info['annos']) for info in gt_pkl]
-# eval_det_annos=eval_det_annos[:5000]
-# eval_gt_annos=eval_gt_annos[:5000]
+#eval_det_annos=eval_det_annos[:10000]
+#eval_gt_annos=eval_gt_annos[:10000]
 from pcdet.datasets.waymo.waymo_eval import OpenPCDetWaymoDetectionMetricsEstimator
 eval = OpenPCDetWaymoDetectionMetricsEstimator()
 
